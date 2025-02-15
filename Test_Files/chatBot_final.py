@@ -30,7 +30,7 @@ index_name = "medical-data"
 # model_name = "qwen-2.5-32b"
 
 
-chat = ChatGroq(
+chat1 = ChatGroq(
     api_key=GROQ_API_KEY,
     model_name=model_name
 )
@@ -47,8 +47,8 @@ embedding_model = SentenceTransformer("sentence-transformers/msmarco-bert-base-d
 
 def main(test_name, report, disease):
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        web_search_content = executor.submit(web_search, test_name, chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
-        VDB_content = executor.submit(VDB_search, test_name, report, chat, disease, embedding_model, index, top_k=5)
+        web_search_content = executor.submit(web_search, test_name, chat1,chat2, SERPER_API_KEY, tokenizer, max_tokens=500)
+        VDB_content = executor.submit(VDB_search, test_name, report, chat2, disease, embedding_model, index, top_k=5)
         
         try:
             web_results = web_search_content.result()
@@ -57,7 +57,7 @@ def main(test_name, report, disease):
             logging.error(f"An error occurred: {e}")
             return None
         
-        final_results = final_output(test_name, vector_results, report, web_results, disease, generated_text, chat, normal_ranges=None)
+        final_results = final_output(test_name, vector_results, report, web_results, disease, generated_text, chat1,chat2, normal_ranges=None)
         return final_results
 
 test_name = "CBC"
