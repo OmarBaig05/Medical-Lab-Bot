@@ -204,9 +204,7 @@ def generate_final_output(report, type, disease, generated_text, context, chat):
 def web_search(test_name, chat1,chat2, SERPER_API_KEY, tokenizer, max_tokens):
     try:
         urls = get_URLs(test_name, SERPER_API_KEY)
-        print(urls)
         interpretation = get_interpretations_list(test_name, urls, chat1, tokenizer, max_tokens)
-        print(interpretation)
         text = summarize_web_content(interpretation, test_name, chat2)
         logging.info("Web search completed")
         return text
