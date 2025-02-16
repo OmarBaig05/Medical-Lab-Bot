@@ -1,16 +1,18 @@
 import time
-script_start = time.time()
 import os
 import dotenv
 import logging
 import tiktoken
 import concurrent.futures
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from pinecone import Pinecone
-
 from langchain_groq import ChatGroq
 from sentence_transformers import SentenceTransformer
 from functions import web_search, VDB_search, final_output
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables
 dotenv.load_dotenv(".env")
@@ -29,7 +31,6 @@ index_name = "medical-data"
 # model_name = "llama-3.3-70b-versatile"
 # model_name = "qwen-2.5-32b"
 
-
 chat1 = ChatGroq(
     api_key=GROQ_API_KEY,
     model_name=model_name
@@ -44,37 +45,38 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(index_name)
 embedding_model = SentenceTransformer("sentence-transformers/msmarco-bert-base-dot-v5")
 
+app = FastAPI()
 
-def main(test_name, report, disease):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        web_search_content = executor.submit(web_search, test_name, chat1,chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
-        VDB_content = executor.submit(VDB_search, test_name, report, chat2, disease, embedding_model, index, top_k=5)
-        
-        try:
-            web_results = web_search_content.result()
-            vector_results, generated_text = VDB_content.result()
-        except Exception as e:
-            logging.error(f"An error occurred: {e}")
-            return None
-        
-        final_results = final_output(test_name, vector_results, report, web_results, disease, generated_text, chat1,chat2, normal_ranges=None)
-        return final_results
+class ReportRequest(BaseModel):
+    test_name: str
+    report: str
+    disease: str
 
-test_name = "CBC"
-disease = "Dengue"
+@app.post("/")
+def process_report(request: ReportRequest):
+    try:
+        logging.info(f"Received request: {request.json()}")
+        test_name = request.test_name
+        report = request.report
+        disease = request.disease
 
-report = """Hemoglobin (Hb)	12.5 g/dL	13.0 - 17.0 g/dL (M) / 12.0 - 15.0 g/dL (F)
-Hematocrit (Hct)	38%	38 - 50% (M) / 36 - 44% (F)
-White Blood Cell (WBC) Count	3,000 cells/µL	4,000 - 11,000 cells/µL
-Neutrophils	35%	40 - 75%
-Lymphocytes	55%	20 - 40%
-Platelet Count	75,000 cells/µL	150,000 - 450,000 cells/µL
-Mean Platelet Volume (MPV)	10.5 fL	7.5 - 12.0 fL"""
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            web_search_content = executor.submit(web_search, test_name, chat1, chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
+            VDB_content = executor.submit(VDB_search, test_name, report, chat2, disease, embedding_model, index, top_k=5)
+            
+            try:
+                web_results = web_search_content.result()
+                vector_results, generated_text = VDB_content.result()
+            except Exception as e:
+                logging.error(f"An error occurred: {e}")
+                raise HTTPException(status_code=500, detail="Internal Server Error")
+            
+            final_results = final_output(test_name, vector_results, report, web_results, disease, generated_text, chat1, chat2, normal_ranges=None)
+            return {"result": final_results}
+    except Exception as e:
+        logging.error(f"Error processing report: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
-start = time.time()
-final_results = main(test_name, report, disease)
-print(final_results)
-end = time.time()
-
-print(f"Time taken: {end - start} seconds")
-print(f"Total time taken: {end - script_start} seconds")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
