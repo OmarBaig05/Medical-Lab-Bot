@@ -2,6 +2,7 @@ import requests
 import json
 import re
 import concurrent.futures
+import threading
 from queue import Queue
 import logging
 from bs4 import BeautifulSoup
@@ -107,7 +108,9 @@ def get_chunks_list_after_extracting_data(urls, tokenizer, max_tokens):
 def get_chunk_interpretation(test_name, chat,text):
     
 
-    
+    print("-------------------------------------------")
+    print("CHUNK: ", text)
+    print("-------------------------------------------")
     messages = [
             SystemMessage(content="You are a medical expert providing the relevant content from the given one."),
             HumanMessage(content=f"""Based on the following information:\n\n{text}\n\n extract the information
@@ -117,6 +120,9 @@ def get_chunk_interpretation(test_name, chat,text):
         ]
     response = chat(messages)
     response = remove_tags(response.content)
+    print("_______________________________")
+    print("RESPONSE: ", response)
+    print("_______________________________")
     return response
 
 def summarize_web_content(list_of_interpretations, test_name, chat):
@@ -212,67 +218,81 @@ def generate_final_output(report, type, disease, generated_text, context, chat):
 
 flag = False
 flag_late = False
+lock = threading.Lock()  # Lock for synchronization
 
 def web_search(test_name, chat1, chat2, SERPER_API_KEY, tokenizer, max_tokens):
-    global flag_late
+    global flag_late, flag
     try:
         urls = get_URLs(test_name, SERPER_API_KEY)
         chunk_list = get_chunks_list_after_extracting_data(urls, tokenizer, max_tokens)
+        chunk_queue = Queue()
+        for chunk in chunk_list:
+            chunk_queue.put(chunk)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            futures = []
-            chunk_queue = Queue()
-            print("length of chunk list",len(chunk_list))
-            for chunk in chunk_list:
-                chunk_queue.put(chunk)
-            
+            futures = {}
+            responses = []
+
             def process_chunk(chat, chat_id):
                 while not chunk_queue.empty():
                     chunk = chunk_queue.get()
                     interpretation = get_chunk_interpretation(test_name, chat, chunk)
+                    
+                    # Synchronize updates to shared variables
+                    with lock:
+                        responses.append((interpretation, chat_id))
+                    
                     chunk_queue.task_done()
-                    return interpretation, chat_id
+                    print("Chat ID: ", chat_id)
+                return responses
             
-            futures.append(executor.submit(process_chunk, chat1, 1))
-            print("outside the flag", flag)
+            futures[executor.submit(process_chunk, chat1, 1)] = 1
+            
             if flag:
-                print("Inside the flag == true condition")
-                futures.append(executor.submit(process_chunk, chat2, 2))
+                futures[executor.submit(process_chunk, chat2, 2)] = 2
             
-            interpretations = []
             for future in concurrent.futures.as_completed(futures):
-                interpretation, chat_id = future.result()
-                interpretations.append(interpretation)
-                flag_late = (chat_id == 2)
-        if flag_late == True:
-            print("Inside the flag_late == true condition")
-            text = summarize_web_content(interpretations, test_name, chat1)
-        else:
-            text = summarize_web_content(interpretations, test_name, chat2)
+                res = future.result()  # Capture result safely
+                
+                # Synchronize updates to flag_late
+                with lock:
+                    if res:
+                        responses.extend(res)
+                        last_chat_id = res[-1][1]  # Last response chat ID
+                        flag_late = (last_chat_id == 2)
+            
+        interpretations = [interp for interp, _ in responses]
+        text = summarize_web_content(interpretations, test_name, chat1 if flag_late else chat2)
+        
         logging.info("Web search completed")
         return text
     except Exception as e:
         logging.error(f"Error during web search: {e}")
         return ""
 
-def VDB_search(test_name, report,chat2, disease, embedding_model, index, top_k=5):
+def VDB_search(test_name, report, chat2, disease, embedding_model, index, top_k=5):
     global flag
     try:
         generated_text = generate_refined_prompt(report, test_name, disease, chat2)
         retrieved_content = retrieve_context(generated_text, embedding_model, index, top_k)
         unique_content = get_unique_content_only(retrieved_content)
-        print(flag)
         
-        flag = True
+        # Synchronize flag update
+        with lock:
+            flag = True
+
         logging.info("VDB search completed")
         return unique_content, generated_text
     except Exception as e:
         logging.error(f"Error during VDB search: {e}")
         return "", ""
 
-def final_output(test_name, unique_content, report, text, disease, generated_text, chat1,chat2, normal_ranges):
+def final_output(test_name, unique_content, report, text, disease, generated_text, chat1, chat2, normal_ranges):
     try:
-        if flag_late:
+        with lock:  # Ensure flag_late is accessed safely
+            is_flag_late = flag_late  # Read inside lock to avoid race condition
+        
+        if is_flag_late:
             print("Inside the flag_late == true condition_final")
             context = discard_irrelevant_context(test_name, normal_ranges, unique_content, report, text, chat2)
             response = generate_final_output(report, test_name, disease, generated_text, context, chat1)
@@ -280,8 +300,8 @@ def final_output(test_name, unique_content, report, text, disease, generated_tex
             print("Inside the flag_late == false condition_final")
             context = discard_irrelevant_context(test_name, normal_ranges, unique_content, report, text, chat1)
             response = generate_final_output(report, test_name, disease, generated_text, context, chat2)
+        
         return response
     except Exception as e:
         logging.error(f"Error generating final output: {e}")
         return ""
-

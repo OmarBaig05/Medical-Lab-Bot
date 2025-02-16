@@ -47,7 +47,7 @@ embedding_model = SentenceTransformer("sentence-transformers/msmarco-bert-base-d
 
 def main(test_name, report, disease):
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        web_search_content = executor.submit(web_search, test_name, chat1,chat2, SERPER_API_KEY, tokenizer, max_tokens=500)
+        web_search_content = executor.submit(web_search, test_name, chat1,chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
         VDB_content = executor.submit(VDB_search, test_name, report, chat2, disease, embedding_model, index, top_k=5)
         
         try:
