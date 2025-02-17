@@ -11,6 +11,7 @@ dotenv.load_dotenv('.env')
 APPWRITE_API = os.getenv('APPWRITE_API_KEY')
 DATABASE_ID = os.getenv('DATABASE_ID')
 PROJECT_ID = os.getenv('PROJECT_ID')
+END_POINT = os.getenv('END_POINT')
 
 # FEEDBACK_ID = os.getenv('FEEDBACK_ID')
 # MEDICAL_REPORTS_ID = os.getenv('MEDICAL_REPORTS_ID')
@@ -19,7 +20,7 @@ PROJECT_ID = os.getenv('PROJECT_ID')
 WEB_SEARCH_DATA_ID = os.getenv('WEB_SEARCH_DATA_ID')
 
 client = Client()
-client.set_endpoint("https://cloud.appwrite.io/v1")
+client.set_endpoint(END_POINT)
 client.set_project(PROJECT_ID)
 client.set_key(APPWRITE_API)  # Use a server-side key
 
@@ -55,8 +56,8 @@ def parse_data(data):
     else:
         return None, None
 
-test_name, web_summarized_data = parse_data(data)
-print(test_name, web_summarized_data)
+# test_name, web_summarized_data = parse_data(data)
+# print(test_name, web_summarized_data)
 
 
 
