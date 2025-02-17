@@ -1,4 +1,3 @@
-import time
 import os
 import dotenv
 import logging
@@ -10,6 +9,7 @@ from pinecone import Pinecone
 from langchain_groq import ChatGroq
 from sentence_transformers import SentenceTransformer
 from functions import web_search, VDB_search, final_output
+from database import store_test_data, complete_retrival
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -55,23 +55,31 @@ class ReportRequest(BaseModel):
 @app.post("/")
 def process_report(request: ReportRequest):
     try:
+        flag = False
         logging.info(f"Received request: {request.json()}")
         test_name = request.test_name
         report = request.report
         disease = request.disease
+        name_of_test, web_description = complete_retrival(test_name)
+        if web_description is not None:
+            web_search_content = web_description
+            flag = True
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            web_search_content = executor.submit(web_search, test_name, chat1, chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
+            if not flag:
+                web_search_content = executor.submit(web_search, test_name, chat1, chat2, SERPER_API_KEY, tokenizer, max_tokens=4500)
             VDB_content = executor.submit(VDB_search, test_name, report, chat2, disease, embedding_model, index, top_k=5)
             
             try:
-                web_results = web_search_content.result()
+                web_results = web_search_content.result() if not flag else web_search_content
                 vector_results, generated_text = VDB_content.result()
             except Exception as e:
                 logging.error(f"An error occurred: {e}")
                 raise HTTPException(status_code=500, detail="Internal Server Error")
             
             final_results = final_output(test_name, vector_results, report, web_results, disease, generated_text, chat1, chat2, normal_ranges=None)
+            if not flag:
+                store_test_data(test_name, web_results)
             return {"result": final_results}
     except Exception as e:
         logging.error(f"Error processing report: {e}")

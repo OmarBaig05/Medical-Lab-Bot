@@ -56,6 +56,11 @@ def parse_data(data):
     else:
         return None, None
 
+def complete_retrival(test_name):
+    data = retrieve_test_data(test_name)
+    return parse_data(data)
+
+
 # test_name, web_summarized_data = parse_data(data)
 # print(test_name, web_summarized_data)
 
