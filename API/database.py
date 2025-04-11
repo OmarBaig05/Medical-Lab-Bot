@@ -8,13 +8,10 @@ import dotenv
 
 
 dotenv.load_dotenv('.env')
-dotenv.load_dotenv('e:/D/Work/Projects/Medical Lab Bot/Test_Files/.env')
 APPWRITE_API = os.getenv('APPWRITE_API_KEY')
 DATABASE_ID = os.getenv('DATABASE_ID')
 PROJECT_ID = os.getenv('PROJECT_ID')
 END_POINT = os.getenv('END_POINT')
-WEB_SEARCH_DATA_ID = os.getenv('WEB_SEARCH_DATA_ID')
-print(DATABASE_ID)
 
 # FEEDBACK_ID = os.getenv('FEEDBACK_ID')
 # MEDICAL_REPORTS_ID = os.getenv('MEDICAL_REPORTS_ID')
@@ -40,17 +37,16 @@ def store_test_data(test_name, web_summarized_data):
     )
     return response
 
-
 def retrieve_test_data(test_name):
     response = database.list_documents(
-        database_id=DATABASE_ID, 
-        collection_id=WEB_SEARCH_DATA_ID,  # Replace with your actual collection ID
-        queries=[f'name="{test_name}"']
+        database_id=DATABASE_ID,
+        collection_id=WEB_SEARCH_DATA_ID,
+        queries=[Query.equal("test_name", test_name)]
     )
     return response
 
 
-data = retrieve_test_data("CBC")
+# data = retrieve_test_data("CBC")
 def parse_data(data):
     if data.get("documents"):  # Ensure documents exist
         document = data["documents"][0]  # First document
