@@ -3,13 +3,21 @@ import dotenv
 import logging
 import tiktoken
 import concurrent.futures
+from pydantic import BaseModel, Field
+from typing import List, Dict
+import os
+from groq import Groq
+import dotenv
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from starlette.responses import PlainTextResponse
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pinecone import Pinecone
 from langchain_groq import ChatGroq
 from sentence_transformers import SentenceTransformer
-from functions import web_search, VDB_search, final_output
+from functions import web_search, VDB_search, final_output, process_image
 from database import store_test_data, complete_retrival
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,6 +36,7 @@ if not PINECONE_API_KEY or not GROQ_API_KEY or not SERPER_API_KEY:
 
 model_name = "deepseek-r1-distill-llama-70b"
 index_name = "medical-data"
+vision_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 # model_name = "llama-3.3-70b-versatile"
 # model_name = "qwen-2.5-32b"
 
@@ -35,6 +44,9 @@ chat1 = ChatGroq(
     api_key=GROQ_API_KEY,
     model_name=model_name
 )
+
+client = Groq(api_key=GROQ_API_KEY)
+
 chat2 = ChatGroq(
     api_key=GROQ_API_KEY_2,
     model_name=model_name
@@ -52,7 +64,34 @@ class ReportRequest(BaseModel):
     report: str
     disease: str
 
-@app.post("/")
+class LabReport(BaseModel):
+    test_name: str = Field(description="The name of the medical lab test (e.g., Complete Blood Count, Lipid Profile)")
+    table_data: List[Dict[str, str]] = Field(description="List of dictionaries containing the lab report data.")
+
+# FastAPI endpoint to process image upload
+@app.post("/extract-lab-report", response_class=PlainTextResponse)
+async def extract_lab_report(file: UploadFile = File(...)):
+    try:
+        # Read the uploaded file content
+        image_content = await file.read()
+        logging.info(f"Received file: {file.filename}, size: {len(image_content)} bytes")
+        
+        if not image_content:
+            raise HTTPException(status_code=400, detail="No image data provided")
+        
+        # Process the image
+        latex_table = process_image(client, image_content, LabReport,vision_model)
+        logging.info(f"Generated LaTeX table: {latex_table[:100]}...")  # Log first 100 characters
+        
+        if not latex_table:
+            raise HTTPException(status_code=500, detail="Failed to extract lab report data")
+        
+        return latex_table
+    except Exception as e:
+        logging.error(f"Error processing image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+@app.post("/chat")
 def process_report(request: ReportRequest):
     try:
         flag = False

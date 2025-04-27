@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+import re
 from flask import Flask, render_template, request, redirect, url_for, flash
 from werkzeug.utils import secure_filename
 
@@ -14,8 +15,8 @@ app.secret_key = "medical_lab_bot_secret_key"
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-OCR_API_URL = "http://localhost:8000/extract-lab-report"
-CHATBOT_API_URL = "http://localhost:8001"
+OCR_API_URL = "http://localhost:8001/extract-lab-report"
+CHATBOT_API_URL = "http://localhost:8001/chat"
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -24,6 +25,28 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Helper function to check allowed file extensions
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def latex_to_html_table(latex_table):
+    """Convert LaTeX table to HTML table."""
+    # Extract rows from the LaTeX table
+    rows = re.findall(r'\\hline\n(.*?)\\\\', latex_table, re.DOTALL)
+    if not rows:
+        return "<p>Invalid LaTeX table format</p>"
+
+    # Build the HTML table
+    html_table = '<table class="table table-bordered">'
+    for i, row in enumerate(rows):
+        html_table += '<tr>'
+        cells = row.split('&')
+        for cell in cells:
+            cell_content = cell.strip()
+            if i == 0:  # First row is the header
+                html_table += f'<th>{cell_content}</th>'
+            else:
+                html_table += f'<td>{cell_content}</td>'
+        html_table += '</tr>'
+    html_table += '</table>'
+    return html_table
 
 @app.route('/')
 def index():
@@ -65,7 +88,11 @@ def analyze_report():
         ocr_response.raise_for_status()
         extracted_text = ocr_response.text
         logging.info(f"OCR Extracted text: {extracted_text[:100]}...")
-        
+        logging.info(f"LaTeX Table Data: {extracted_text}")
+
+        # Convert LaTeX table to HTML
+        html_table = latex_to_html_table(extracted_text)
+
         # Step 2: Send extracted text to chatbot API
         chatbot_payload = {
             "test_name": test_name,
@@ -73,18 +100,19 @@ def analyze_report():
             "disease": disease
         }
         logging.info(f"Sending data to Chatbot API: {chatbot_payload}")
-        
+
         chatbot_response = requests.post(CHATBOT_API_URL, json=chatbot_payload)
         chatbot_response.raise_for_status()
         interpretation = chatbot_response.json().get("result", "No interpretation available")
-        
+
         # Step 3: Display results
         return render_template(
             'result.html', 
             test_name=test_name, 
             disease=disease, 
             report_text=extracted_text,
-            interpretation=interpretation
+            interpretation=interpretation,
+            latex_table=html_table  # Pass the HTML table here
         )
         
     except requests.exceptions.RequestException as e:
