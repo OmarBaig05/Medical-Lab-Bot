@@ -189,9 +189,7 @@ def generate_final_output(report, type, disease, generated_text, context, chat):
     you the lab report, the test type, the disease which the patient thinks he is suffering from and some context which may assist you in interpreting the report.
     Interpret the report in layman understandable form in just 2 lines, not more than that and do not write anything else other than the interpretation. If you think that
     the disease he thinks he is suffering from does not match the report, you can mention that as well and recommend the possible diseases. In case the Context is not beneficial,
-    you can ignore it and answer from your own knowledge. Also score your answer out of 10, but just the number in the markdown form, nothing else. The answer should not be more than 2 to 3 lines.
-    And after that also tell whether the provided context was helpful in interpretation or not, and provide the part which was helpful (it can be detailed)
-    also rate the helpfulness.
+    you can ignore it and answer from your own knowledge.
     :
         
     Context: {context}
