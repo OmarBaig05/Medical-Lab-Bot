@@ -1,3 +1,4 @@
+from langchain_groq import ChatGroq
 import requests
 import base64
 from langchain_core.output_parsers import PydanticOutputParser
@@ -8,7 +9,6 @@ from bs4 import BeautifulSoup
 from langchain_core.output_parsers import StrOutputParser
 from langchain.schema import SystemMessage, HumanMessage
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
@@ -234,108 +234,127 @@ def final_output(test_name, unique_content, report, text, disease, generated_tex
     except Exception as e:
         logging.error(f"Error generating final output: {e}")
         return ""
-    
 
-# OCR related functions
-def process_image(chat_instance, image_content: bytes,LabReport,model):
+
+from pydantic import BaseModel, Field
+from typing import List
+
+class DynamicEntry(BaseModel):
+    field_name: str = Field(..., description="The label/key as it appears in the report, e.g., 'Hemoglobin', 'Result', 'Findings'")
+    field_value: str = Field(..., description="The corresponding value from the report")
+
+class LabReport(BaseModel):
+    test_name: str = Field(..., description="The name of the medical lab test (e.g., CBC, Prolactin Test, Lipid Profile)")
+    report_type: str = Field(..., description="Type of report: 'tabular' or 'descriptive'")
+    entries: List[DynamicEntry] = Field(..., description="List of extracted key-value entries from the report")
+  
+
+import base64
+import logging
+import re
+from langchain.output_parsers import PydanticOutputParser
+
+def process_image(chat_instance, image_content: bytes, LabReport, k: int = 3):
+    """
+    Extracts structured lab report data from an image using an image-capable LLM.
+    Ensures JSON output matches the LabReport Pydantic schema.
+    
+    Retries up to k times if parsing fails.
+    """
     def encode_image(image_content):
         return base64.b64encode(image_content).decode('utf-8')
 
     base64_image = encode_image(image_content)
+    parser = PydanticOutputParser(pydantic_object=LabReport)
+
+    def clean_json(raw: str) -> str:
+        """Remove code fences or extra text around JSON."""
+        # Extract JSON between triple backticks if present
+        match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        # Otherwise, try to find the first JSON-like block
+        match = re.search(r"(\{.*\})", raw, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return raw.strip()
 
     def request_llm(base64_image, attempt=1):
-        parser = PydanticOutputParser(pydantic_object=LabReport)
-        
-        # Prompt for LaTeX table output without specifying column names
-        prompt = f"""Extract the medical lab report details from the provided image and format them as a LaTeX table. Include the test name as the table caption and all relevant table data from the report, ensuring that units are preserved and no lab-related details are omitted. Ignore unnecessary information like patient name, address, or anything else not related to the lab data. Ensure accurate readings and units from the image. Return ONLY the LaTeX table code, starting with \\begin{{table}} and ending with \\end{{table}}, with no additional text or explanations. The table structure should align with this format: {parser.get_format_instructions()}"""
-        
-        # Modify prompt for second attempt
+        prompt = f"""
+        You are an expert medical data extraction assistant. 
+        Your task is to extract all the information from the lab report image into a JSON object. 
+
+        JSON Schema:
+        {parser.get_format_instructions()}
+
+        Rules:
+        - Return ONLY valid JSON (no explanations, no markdown, no ```json fences).
+        - Preserve the original structure of the report.
+        - Do NOT enforce fixed field names like 'parameter' or 'unit'. 
+          Instead, extract fields exactly as they appear in the report (e.g., 'Result', 'Value', 'Flag', 'Observation').
+        - For tabular reports, each column/row should become an entry in `entries`.
+        - For descriptive/narrative reports, break down information into meaningful key-value pairs.
+        - Always return strictly valid JSON.
+        - Ignore irrelevant personal details (patient name, ID, address).
+        """
+
         if attempt > 1:
-            prompt = f"""Extract the medical lab report information from the image, focusing only on the test name and all relevant report data. Ignore irrelevant details like patient name or address. Format the output as a LaTeX table with the test name as the caption, including all lab data with accurate readings and units. Return ONLY the LaTeX table code, starting with \\begin{{table}} and ending with \\end{{table}}, with no additional text. The table structure should align with: {parser.get_format_instructions()}"""
+            prompt = f"""
+            Retry attempt {attempt}: Please extract the lab report again and return valid JSON only.
+            Follow this schema strictly:
+            {parser.get_format_instructions()}
+            """
 
-        chat_completion = chat_instance.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                    ],
-                }
-            ],
-            model=model,
-        )
-        
-        return chat_completion.choices[0].message.content
-    
-    response = request_llm(base64_image)
-    
-    latex_table = parse_response_to_latex(response,LabReport)
-    
-    if not latex_table:
-        response = request_llm(base64_image, attempt=2)
-        latex_table = parse_response_to_latex(response,LabReport)
-    
-    return latex_table
+        messages = [
+            (
+                "user",
+                [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            )
+        ]
 
-def parse_response_to_latex(response: str,LabReport) -> str:
+        response = chat_instance.invoke(messages)
+        return clean_json(response.content)
+
+    # Retry loop
+    for attempt in range(1, k + 1):
+        try:
+            response = request_llm(base64_image, attempt)
+            parsed_report = LabReport.parse_raw(response)
+            logging.info(f"Successfully parsed lab report on attempt {attempt}")
+            return parsed_report
+        except Exception as e:
+            logging.warning(f"Attempt {attempt} failed to parse JSON: {e}")
+            if attempt == k:
+                raise ValueError("Failed to parse lab report into valid JSON after multiple retries.")
+
+    return None
+
+
+def vanilla_model_to_interpret_report(report: str, type: str, disease: str, chat: ChatGroq) -> str:
     """
-    Parse the model response to extract and validate a LaTeX table with dynamic columns.
-    
-    Args:
-        response (str): Raw response from the model.
-    
-    Returns:
-        str: LaTeX table code or empty string if parsing fails.
+    Interpret the medical lab report using Groq LLM with a strict prompt template.
+    Only TYPE, DISEASE, and REPORT are passed (no context).
     """
+
+    prompt = f"""You are an expert doctor. You have to interpret the medical lab report of the patient. 
+    I have provided you the lab report, the test type, and the disease which the patient thinks he is suffering from. 
+    Interpret the report in layman understandable form in just 2 lines, not more than that, and do not write anything else other than the interpretation. 
+    If you think that the disease he thinks he is suffering from does not match the report, you can mention that as well and recommend the possible diseases.
+    Answer:
+    
+    Type: {type}
+    Disease: {disease}
+    Report: {report}
+    """
+
     try:
-        # Extract LaTeX table
-        pattern = re.compile(r'\\begin{table}.*?\\end{table}', re.DOTALL)
-        match = pattern.search(response)
-        if not match:
-            raise ValueError("No valid LaTeX table found")
-        
-        latex_table = match.group(0).strip()
-        
-        # Validate structure by converting to JSON-like format for Pydantic
-        lines = latex_table.split('\n')
-        test_name = ""
-        table_data = []
-        in_tabular = False
-        headers = None
-        
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line.startswith("\\caption{"):
-                test_name = line[len("\\caption{"):-1]
-            if line.startswith("\\begin{tabular}"):
-                in_tabular = True
-                continue
-            if line.startswith("\\end{tabular}"):
-                in_tabular = False
-                continue
-            if in_tabular:
-                if line.startswith("\\hline") or not line:
-                    continue
-                # First non-hline row is assumed to be headers
-                if headers is None and not line.startswith("Parameter"):
-                    headers = [h.strip().replace("\\", "") for h in line.split('&') if h.strip()]
-                    continue
-                # Parse table row dynamically based on headers
-                if headers:
-                    parts = [p.strip() for p in line.split('&')]
-                    if len(parts) >= len(headers):  # Ensure row has at least as many columns as headers
-                        row = {headers[i]: parts[i].replace("\\", "").split('\\\\')[0] for i in range(len(headers))}
-                        table_data.append(row)
-        
-        # Validate with Pydantic
-        if not test_name or not table_data:
-            raise ValueError("Incomplete table data extracted")
-        lab_report = LabReport(test_name=test_name, table_data=table_data)
-        lab_report.model_dump()  # Ensure validation
-        
-        return latex_table
+        chain = chat | StrOutputParser()
+        response = chain.invoke(prompt)
+        response = remove_tags(response)
+        return response
     except Exception as e:
-        print(f"Error parsing LaTeX table: {e}")
-        return ""
-
+        logging.error(f"Error interpreting lab report: {str(e)}")
+        return "Error: Unable to interpret lab report."

@@ -1,6 +1,7 @@
 import os
 import dotenv
 import logging
+from fastapi.responses import JSONResponse
 import tiktoken
 import concurrent.futures
 from pydantic import BaseModel, Field
@@ -34,7 +35,7 @@ if not PINECONE_API_KEY or not GROQ_API_KEY or not SERPER_API_KEY:
     logging.error("API keys are not set in the environment variables.")
     raise EnvironmentError("API keys are not set in the environment variables.")
 
-model_name = "deepseek-r1-distill-llama-70b"
+model_name = "openai/gpt-oss-120b"
 index_name = "medical-data"
 vision_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 # model_name = "llama-3.3-70b-versatile"
@@ -45,13 +46,13 @@ chat1 = ChatGroq(
     model_name=model_name
 )
 
-client = Groq(api_key=GROQ_API_KEY)
+vision_model = ChatGroq(api_key=GROQ_API_KEY, model_name=vision_model)
 
 chat2 = ChatGroq(
     api_key=GROQ_API_KEY_2,
     model_name=model_name
 )
-tokenizer = tiktoken.get_encoding("cl100k_base")  # Adjust for your LLM
+tokenizer = tiktoken.get_encoding("cl100k_base")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(index_name)
@@ -69,24 +70,28 @@ class LabReport(BaseModel):
     table_data: List[Dict[str, str]] = Field(description="List of dictionaries containing the lab report data.")
 
 # FastAPI endpoint to process image upload
-@app.post("/extract-lab-report", response_class=PlainTextResponse)
+@app.post("/extract-lab-report")
 async def extract_lab_report(file: UploadFile = File(...)):
     try:
         # Read the uploaded file content
         image_content = await file.read()
         logging.info(f"Received file: {file.filename}, size: {len(image_content)} bytes")
-        
+
         if not image_content:
             raise HTTPException(status_code=400, detail="No image data provided")
-        
-        # Process the image
-        latex_table = process_image(client, image_content, LabReport,vision_model)
-        logging.info(f"Generated LaTeX table: {latex_table[:100]}...")  # Log first 100 characters
-        
-        if not latex_table:
+
+        # Process the image (returns a LabReport object)
+        lab_report = process_image(vision_model, image_content, LabReport)
+
+        if not lab_report:
             raise HTTPException(status_code=500, detail="Failed to extract lab report data")
-        
-        return latex_table
+
+        # Convert Pydantic model to dict for FastAPI response
+        report_dict = lab_report.dict()
+
+        logging.info(f"Generated json table: {str(report_dict)[:100]}...")
+        return JSONResponse(content=report_dict)
+
     except Exception as e:
         logging.error(f"Error processing image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
